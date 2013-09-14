@@ -3,8 +3,10 @@
 
 # ignore pickled files:
 *.p
-# also ignore text files
+# ignore text files:
 *.txt
+# ignore anything including "my"
+*my*
 
 *.py[cod]
 
