@@ -4,15 +4,21 @@
 import psycopg2
 import getpass 
 import sys
+import tools4urls
+import pickle
+import time
 
 class ConnSettings:
+    """ really simple class to hold postgres connection settings
+        (could have just used a dictionary)
+        """
     h = ''
     p = None 
     d = ''
     u = ''
 
 def getcs():
-    """ Returns instance of ConnSettings """
+    """ returns instance of ConnSettings """
     cs = ConnSettings()
     print('enter host name: ')
     cs.h = sys.stdin.readline().strip()
@@ -25,9 +31,9 @@ def getcs():
     return cs
 
 def openconn(settings):
-    """ return PostGreSQL database connection
-    settings = a ConnSettings object
-    """
+    """ returns PostGreSQL database connection
+        settings = a ConnSettings object
+        """
     print('initiating connection to database ...')
     thishost = settings.h
     thisport = settings.p
@@ -40,71 +46,6 @@ def openconn(settings):
         print('connection established successfully')
     return conn
 
-def runuserquery(usersfilename, iandtfilename, tfilename):
-    # usersfilename is the name of the file from which to get users
-    # iandtfilename is the name of the file to which to write ids and tweets
-    # tfilename is the name of the file to which to write tweets only
-
-    # open connection to PostGreSQL server
-    newconn = openconn()
-    # manually specify user ids & handles (that order) in file called 'users':
-    usersfile = open(usersfilename, 'r')
-    # initialize dictionary for mapping 
-    handlemap = {} 
-    # open/close files to erase previous contents ('append' flag used later)
-    open(iandtfilename,'w').close()
-    open(tfilename,'w').close()
-    # loop through all the users write their tweets to file
-    for line in usersfile:
-        # get user id and handle (screen name)
-        userid = line.split()[0]
-        userhandle = line.split()[1].strip()
-        # construct query and get data from postgreSQL
-        cond = "user_id = '" + userid + "'"
-        twtids = writeidandtwt(newconn, cond, iandtfilename, tfilename)
-        # get mapping 
-        newhandlemap  = {i: userhandle for i in twtids}
-        handlemap.update(newhandlemap)
-    usersfile.close()
-    close(newconn)
-    return handlemap
-
-def getstuff(conn, myquery):
-    cur = conn.cursor()
-    print('running query ...\n') 
-    cur.execute(myquery)
-    # fetchall returns a list of tuples
-    qresults = cur.fetchall()
-    cur.close()
-    print('... query complete') 
-    return qresults
-
-def gettext(conn, cond):
-    # this function returns lists of strings
-    cur = conn.cursor()
-    myquery = 'SELECT text FROM tweets WHERE ' + cond + ';'
-    cur.execute(myquery)
-    qresults = cur.fetchall()
-    cur.close()
-    textlist = [list(t)[0] for t in qresults]
-    return textlist
-
-def writeidandtwt(conn, cond, idandtwtfilename, twtfilename):
-    # this function gets ids and tweets and writes them to a file
-    # it also writes only tweets to another file
-    cur = conn.cursor()
-    myquery = 'SELECT id,text FROM tweets WHERE ' + cond + ';'
-    cur.execute(myquery)
-    qresults = cur.fetchall()
-    idandtwtfile = open(idandtwtfilename, 'a')
-    twtfile = open(twtfilename, 'a')
-    for qr in qresults:
-        idandtwtfile.write(str(qr[0]) + ' ' + str(qr[1]) + '\n')
-        twtfile.write(qr[1] + '\n')
-    cur.close()
-    ids = [qr[0] for qr in qresults]
-    return ids
-
 def close(conn):
 	conn.close()
 	print('connection closed')
@@ -114,4 +55,81 @@ def ex_cond1():
 
 def ex_cond2():
     return 'id = "262345490174181376"'
+
+
+def writenativedb(filename):
+    """ returns a rudimentary form of relational database as a list
+        of dictionaries, which are both native python data types
+        "ntwts" = number of tweets to retrieve
+        """
+    
+    # get number of tweets from user:
+    prompt = 'How many tweets do you want to get?'
+    print(prompt)
+    ntwts = int(sys.stdin.readline())
+
+    pgconn = openconn(getcs())
+
+    # get tweet ids and raw text from "tweets" database:
+    twts_cur = pgconn.cursor()
+    twts_query = 'SELECT id,text,user_id FROM tweets;'
+    twts_cur.execute(twts_query)
+
+    nativedb = []
+    dummydb = []
+
+    rcnt = 0
+    for twt in twts_cur.fetchall():
+        dummydb.append({})
+        dummydb[rcnt].update({'twtid': twt[0]})
+        dummydb[rcnt].update({'raw': twt[1].replace('\n',' ')})	
+        dummydb[rcnt].update({'userid': twt[2]})	
+        rcnt += 1
+        # output progress: 
+        readprogress = 'tweets read: %-8i' % rcnt
+        sys.stdout.flush()
+        sys.stdout.write('\r' + readprogress)
+        # check limit:
+        if rcnt >= ntwts:
+            break
+    print # close progress line
+
+    # filter out tweets that lack native images:
+    icnt = 0
+    for icnt in range(ntwts):
+        raw = dummydb[icnt]['raw']
+        imgstatus = 'looking for img in tweet '
+        imgstatus += str(icnt+1) + ': ... %-35s' % raw[-35:]
+        sys.stdout.flush()
+        sys.stdout.write('\r' + imgstatus)
+        check4img = tools4urls.hasnimage(raw)
+        if check4img:
+            nativedb.append(dummydb[icnt])
+    print # close status
+    print('tweets with images found: %-8i' % len(nativedb))
+    
+    # identify handles by looking up user id in "users" database:
+    users_cur = pgconn.cursor()
+    users_query = 'SELECT id,screen_name FROM users'
+    users_cur.execute(users_query)
+    ucnt = 0
+    id2handle = dict(users_cur.fetchall())
+    for inst in nativedb:
+        inst.update({'handle': id2handle[inst['userid']]})
+        ucnt += 1
+        userprogress = 'user handles read: %-8i' % ucnt
+        sys.stdout.flush()
+        sys.stdout.write('\r' + userprogress)
+    print
+    users_cur.close()
+
+	
+    # close connection and pickle database:
+    pgconn.close()
+    pickle.dump(nativedb, open(filename, 'w'))
+    print('pickling complete')
+    return None
+
+
+
 

@@ -3,140 +3,185 @@
 import webbrowser 
 import sys
 import random
-import re
+import pickle
+import time
 
-def labelmanually(infilename, pgsfilename, checksfilename, handlemap):
-    # open files:
-    # infeatures is the file from which to get unlabeled feature vectors:
-    infeatures = open(infilename, 'r')
-    # outfeatures is the file to which to write the labeled feature vectors:
-    outfilename = re.split('\.', infilename)[0] + '_labeled.txt'
-    outfeatures = open(outfilename, 'w')
-    # pgs is the file of id #s and tweets directly output from PostGreSQL:
-    pgs = open(pgsfilename, 'r')
-    # checks is the filtered tweet file from which features were generated:
-    checks = open(checksfilename, 'r')
-    # labelfile is the file into which only labels are place
-    # this file can later be used as the input for labelfromfile() 
-    labelsonly = open('labelsonly', 'w')
 
-    # loop through the input file
-    for line in infeatures:
-        # get lines from other files:
-        idandtwt = pgs.readline().strip()
-        twtid = idandtwt[0:18]
-        twttext = idandtwt[18:]
-        user = handlemap[twtid]
-        checkline = checks.readline()
-        # check whether this line has been labeled:
-        lastel = line.split()[-1]
-        if lastel.strip() in {'pos', 'neg'}:
-            # if labeled simply transfer the line to the output file
-            outfeatures.write(line)
-            # write label to file for reference:
-            label = lastel.strip()
-            labelsonly.write(label + '\n')
-        elif lastel.strip() in {'skipped','quit'}:
-            # if skipped, apply manual labeling:
-            label = getlabel(user, twtid, twttext)
-            # write labeled features to outfile:
-            featurevals = ' '.join(line.split()[:-1])
-            outfeatures.write(featurevals + ', ' + label + '\n')
-            # write label to file for reference:
-            labelsonly.write(label + '\n')
-            # conduct random check:
-            runcheck(checkline)
-        else:
-            # if unlabeled, apply manual labeling:
-            label = getlabel(user, twtid, twttext)
-            # write labeled features to outfile:
-            outfeatures.write(line.strip() + ', ' + label + '\n')
-            # conduct random check:
-            runcheck(checkline)
-            # write label to file for reference:
-            labelsonly.write(label + '\n')
-        if label == 'quit':
-            infeatures.close()
-            outfeatures.close()
-            pgs.close()
-            checks.close()
-            labelsonly.close()            
-            break
-    return None 
 
-def labelfromfile(infilename, labelfilename):
-    # open files:
-    # infeatures is the file from which to get unlabeled feature vectors:
-    infeatures = open(infilename, 'r')
-    # outfeatures is the file to which to write the labeled feature vectors:
-    outfilename = re.split('\.', infilename)[0] + '_labeled.txt'
-    outfeatures = open(outfilename, 'w')
-    # labelfile is the file from which to get the labels
+def getlabelmap(labelfilename):
+    """ returns a dictionary of label symbols and descriptions 
+        from the specified file
+        """
+
     labelfile = open(labelfilename, 'r')
+    labelmap = {}
+    # loop through the file
+    for line in labelfile:
+        # only parse line if nonempty and not a comment 
+        notempty = (line.strip() != '')
+        if notempty:
+            notcomment = (line.strip()[0] != '#')
+            if notcomment:
+                parsedline = line.split('=')
+                symbol = parsedline[0].strip()
+                desc = parsedline[1].strip()
+                labelmap.update({symbol: desc})
+    labelfile.close()
+    return labelmap
+
+
+
+def explainlabels(labelmap):
+    """ prints explanation of labeling system """ 
+    
+    print
+    for k in labelmap.keys():
+        start = '%3s = ' % k
+        print(start + labelmap[k])
+    print
+    return None
+
+
+
+def writelabels(dbfilename, labelsystem):
+    """ adds labels to the native database """
+    
+    # unpickle db file:
+    nativedb = pickle.load(open(dbfilename, 'r'))
+    
+    # get user options for replacement:
+    prompt1 = 'Do you want the option to replace existing labels? [y/n]'
+    prompt1 += '\n(if no, they will be automatically accepted)'
+    print(prompt1)
+    rawinput = sys.stdin.readline()
+    if (rawinput.strip() in {'y', 'ye', 'yes'}):
+        replace = True
+    else:
+        replace = False
+
+    # get user options for recycling:
+    prompt2 = 'On average, how often do you want to recycle?'
+    prompt2 += '\n(express as integer per 100 tweets)'
+    print(prompt2)
+    rawinput = sys.stdin.readline()
+    recyclefreq = int(rawinput)/100.0
 
     # loop through the input file
-    for line in infeatures:
-        # get label from label file:
-        label = labelfile.readline().strip()
+    start = time.time()
+    totalcnt = 0
+    labelcnt = 0
+    rbin = []
+    for inst in nativedb:
         # check whether this line has been labeled:
-        lastel = line.split()[-1]
-        if lastel.strip() in {'pos', 'neg'}:
-            # if labeled simply transfer the line to the output file
-            outfeatures.write(line)
-        elif lastel.strip() in {'skipped','quit'}:
-            # if skipped, remove skipped label and add new label
-            featurevals = ' '.join(line.split()[:-1])
-            outfeatures.write(featurevals + ', ' + label + '\n')
-        else:
-            # if unlabeled, add new label
-            outfeatures.write(line.strip() + ', ' + label + '\n')
+        isempty = (inst.get('label') == None)
+        # if label is empty or u want to replace it, get label:
+        if (isempty | replace):
+            thistwtinfo = (inst['handle'], inst['twtid'], inst['raw'])
+            existing = (inst.get('label'))
+            uinput = getuserinput(thistwtinfo, existing, labelsystem) 
+            if (uinput != None):
+                inst['label'] = uinput
+                labelcnt = labelcnt + 1
+            else: 
+                print('goodbye')
+                break 
+
+        # add to and draw from the recycle bin at a random time
+        rbin.append(inst)
+        if random.random() < recyclefreq:
+            index = int(round(random.random()*(len(rbin)-1)))
+            if len(rbin) > 1:
+                recycled = rbin.pop(index)
+            else:
+                recycled = rbin[0]
+            # execute 
+            handle = recycled['handle']
+            twtid = recycled['twtid']
+            raw = recycled['raw']
+            thistwtinfo = (handle, twtid, raw)
+            existinglabel = recycled.get('label')
+            rprompt = 'this is a recycle - changes will NOT be saved'
+            print(rprompt)
+            getuserinput(thistwtinfo, existinglabel, labelsystem) 
+
+        # increment overall counter
+        totalcnt += 1
+
+    # print exit message:
+    print(str(totalcnt - labelcnt) + ' previous instance labels accepted')
+    print(str(labelcnt) + ' instances (re)labeled')
+    stop = time.time()
+    labelingtime = stop-start
+    labelrate = labelcnt/labelingtime
+    milliTz = labelrate*1000
+    perminute = labelrate*60
+    ratemsg = 'labeling rate: %.2f /minute ' % perminute 
+    ratemsg += '(%.1f milliTwertz)' % milliTz 
+    print(ratemsg)
+
+    # do file dumps and exit:
+    pickle.dump(nativedb, open(dbfilename, 'w'))
+    writesnapshot(nativedb)
     return None 
 
 
-def getlabel(userhandle='', twtid='', twttext=''):
-    # open tweet in browser:
-    if (userhandle != '') & (twtid != ''):
-        twturl = 'https://twitter.com/' + userhandle + '/status/' + twtid
-        webbrowser.open(twturl) 
-    # prepare prompt for user:
-    initialtext = '"' + twttext[:20] + '..."'
-    if twttext == '':
-        prompt = 'Is this a positive instance? [y/n/skip] '
-    else:
-        prompt = 'Is ' + initialtext  + ' a positive instance? [y/n/skip/quit] '
-    # assign label:
-    label = ''
-    while label == '':
+
+def getuserinput(twtinfo, existinglabel, labelsystem):
+    """ returns user-entered label or control command 
+        twtinfo is a tuple of: handle, twtid, twttext
+        """ 
+
+    # construct url and open in browser:
+    handle = twtinfo[0]
+    twtid = twtinfo[1]
+    twturl = 'https://twitter.com/' + handle + '/status/' + twtid
+    webbrowser.open(twturl)
+ 
+    # prepare initial text and prompt for user:
+    twttext = twtinfo[2]
+    initialtext = '"' + twttext[:40] + '..."'
+    prompt = 'Enter [label]/help/quit for ' + initialtext 
+    prompt += '\n(current label: "' + str(existinglabel) + '")'
+
+    # interact with user:
+    label = None
+    while (label == None):
         print(prompt)
-        rawlabel = sys.stdin.readline()
-        if rawlabel.strip() in {'y', 'yes', 'yeah', 'pos', 'positive'}:
-            label = 'pos'
-        elif rawlabel.strip() in {'n', 'no', 'neg', 'negative'}:
-            label = 'neg'
-        elif rawlabel.strip() in {'s','skip', 'skipped'}:
-            label = 'skipped'
-        elif rawlabel.strip() in {'q','quit'}:
-            label = 'quit'
+        rawinput = sys.stdin.readline().strip()
+        # save input if it matches a valid symbol: 
+        if rawinput in labelsystem.keys():
+            label = rawinput
+        # print symbols and descriptions of labels if users asks:
+        elif rawinput in {'h', 'he', 'hel', 'help'}:
+            explainlabels(labelsystem)
+        # quit option:
+        elif rawinput in {'q','quit'}:
+            break
         else:
-            print('Error: Input not understood, retry ') 
+            print('error: input not understood, retry ') 
+
     return label
+
+
+
+def writesnapshot(nativedb):
+    """ pickles twtids and labels every time labeling is run """
+
+    snapshot = {t['twtid']: t.get('label') for t in nativedb}
+    namestamp = time.strftime('%Y-%m-%d_%H:%m:%S')
+    picklename = 'labelsnapshot_' + namestamp + '.p'
+    pickle.dump(snapshot, open(picklename, 'w'))
+    return None
+
+
 
 def exhandle():
     return 'SportsCenter'
 
+
+
 def exid():
     return '377305730291740672'
-
-def runcheck(twtcheckline):
-    if random.random() > 0.9:
-        checklist = twtcheckline.strip().split()
-        nwords = min(5, len(checklist))
-        checkwords = checklist[0:nwords]
-        checkstring = ', '.join(checklist)
-        checkmsg = '(this tweet should include: "' + checkstring + ' ..."'
-        print(checkmsg)
-    return None
-
 
 
 
