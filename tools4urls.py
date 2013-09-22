@@ -11,6 +11,24 @@ import os.path
 #     - account for multiple links
 #     - add nativecheck to fullsave method
 
+
+def connectionOK():
+    """ checks network connection by trying to open google """
+
+    check = False
+    try:
+        testconn = urllib.urlopen('http://www.google.com')
+        if (str(testconn.getcode()) == '200'):
+            print('network connection OK')
+            check = True
+        else:
+            print('error: network connection could not be established')
+    except:
+        print('error: network connection could not be established')
+    return check
+
+
+
 def hasnimage(twt):
     """ returns True/False depending on whether an native image
         is linked to from the tweet   

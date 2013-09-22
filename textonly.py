@@ -26,11 +26,13 @@ import pickle
 
 #################### (1) Get Tweets ####################
 tools4pgs.writenativedb('data.p')
+tools4pgs.writecheck4imgs('data.p')
 
 
 #################### (2) Apply Labels ####################
 labelmap = tools4labeling.getlabelmap('labelsystem')
 tools4labeling.writelabels('data.p', labelmap)
+
 
 
 #################### (3) Filter ####################

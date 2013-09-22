@@ -49,15 +49,15 @@ def writelabels(dbfilename, labelsystem):
     # unpickle db file:
     nativedb = pickle.load(open(dbfilename, 'r'))
     
-    # get user options for replacement:
+    # get user options for replacementment:
     prompt1 = 'Do you want the option to replace existing labels? [y/n]'
     prompt1 += '\n(if no, they will be automatically accepted)'
     print(prompt1)
     rawinput = sys.stdin.readline()
     if (rawinput.strip() in {'y', 'ye', 'yes'}):
-        replace = True
+        doreplacement = True
     else:
-        replace = False
+        doreplacement = False
 
     # get user options for recycling:
     prompt2 = 'On average, how often do you want to recycle?'
@@ -66,25 +66,50 @@ def writelabels(dbfilename, labelsystem):
     rawinput = sys.stdin.readline()
     recyclefreq = int(rawinput)/100.0
 
+    # set up shuffling
+    maybeshuffled = range(len(nativedb))
+    prompt3 = 'Do you want to label tweets in random sequence [y/n]?'
+    print(prompt3)
+    rawinput = sys.stdin.readline()  
+    if (rawinput.strip() in {'y', 'ye', 'yes'}):
+        random.shuffle(maybeshuffled)
+
     # loop through the input file
     start = time.time()
-    totalcnt = 0
+    loopcnt = 0
     labelcnt = 0
+    skipcnt = 0
     rbin = []
-    for inst in nativedb:
+    while loopcnt < len(nativedb):
+        # if no shuffling, 'maybeshuffled' just returns identity
+        index = maybeshuffled[loopcnt]
+        inst = nativedb[index]
         # check whether this line has been labeled:
         isempty = (inst.get('label') == None)
-        # if label is empty or u want to replace it, get label:
-        if (isempty | replace):
+        # if label is empty or u want to doreplacement, get label:
+        if (isempty | doreplacement):
             thistwtinfo = (inst['handle'], inst['twtid'], inst['raw'])
             existing = (inst.get('label'))
             uinput = getuserinput(thistwtinfo, existing, labelsystem) 
             if (uinput != None):
                 inst['label'] = uinput
-                labelcnt = labelcnt + 1
+                # because this is a normal label, increment counters:
+                labelcnt += 1
+                loopcnt += 1
             else: 
-                print('goodbye')
-                break 
+                print('quit? [y/n] (if no, will go back)')
+                rawinput = sys.stdin.readline().strip()
+                if rawinput in {'y','yes','q','qu','quit'}:
+                    print('goodbye')
+                    break
+                else:
+                    print('going back ...')
+                    # de-increment counters to go back:
+                    labelcnt -= 1
+                    loopcnt -= 1
+        else:
+            # if not replacing, just increment counter:
+            skipcnt += 1
 
         # add to and draw from the recycle bin at a random time
         rbin.append(inst)
@@ -104,24 +129,37 @@ def writelabels(dbfilename, labelsystem):
             print(rprompt)
             getuserinput(thistwtinfo, existinglabel, labelsystem) 
 
-        # increment overall counter
-        totalcnt += 1
+    
+    
 
-    # print exit message:
-    print(str(totalcnt - labelcnt) + ' previous instance labels accepted')
-    print(str(labelcnt) + ' instances (re)labeled')
+    # remove tweets labeled with zero
+    prefiltercnt = len(nativedb)
+    nativedb = [ndb for ndb in nativedb if ndb.get('label') != '0']
+    postfiltercnt = len(nativedb)
+    filtercnt = prefiltercnt - postfiltercnt
+    
+    # pickle database and snapshot
+    pickle.dump(nativedb, open(dbfilename, 'w'))
+    writesnapshot(nativedb)
+
+    # print exit message:    
     stop = time.time()
     labelingtime = stop-start
     labelrate = labelcnt/labelingtime
     milliTz = labelrate*1000
     perminute = labelrate*60
-    ratemsg = 'labeling rate: %.2f /minute ' % perminute 
+    ratemsg = '#    %.2f labels/minute ' % perminute 
     ratemsg += '(%.1f milliTwertz)' % milliTz 
+    print
+    print('######################## SUMMARY ########################')
+    print('#    ' + str(filtercnt) + ' instances removed ("0" label)')
+    print('#    ' + str(postfiltercnt) + ' instances written to file')
+    print('#    ' + str(skipcnt) + ' labels automatically accepted')
+    print('#    ' + str(labelcnt) + ' instances (re)labeled')
     print(ratemsg)
+    print('#        (NOTE: not counting recycled instances)')
+    print
 
-    # do file dumps and exit:
-    pickle.dump(nativedb, open(dbfilename, 'w'))
-    writesnapshot(nativedb)
     return None 
 
 
@@ -140,7 +178,7 @@ def getuserinput(twtinfo, existinglabel, labelsystem):
     # prepare initial text and prompt for user:
     twttext = twtinfo[2]
     initialtext = '"' + twttext[:40] + '..."'
-    prompt = 'Enter [label]/help/quit for ' + initialtext 
+    prompt = 'Enter [label]/help/escape for ' + initialtext 
     prompt += '\n(current label: "' + str(existinglabel) + '")'
 
     # interact with user:
@@ -154,8 +192,8 @@ def getuserinput(twtinfo, existinglabel, labelsystem):
         # print symbols and descriptions of labels if users asks:
         elif rawinput in {'h', 'he', 'hel', 'help'}:
             explainlabels(labelsystem)
-        # quit option:
-        elif rawinput in {'q','quit'}:
+        # escape option:
+        elif rawinput in {'e','esc','escape','q','quit','b','back'}:
             break
         else:
             print('error: input not understood, retry ') 
@@ -168,7 +206,7 @@ def writesnapshot(nativedb):
     """ pickles twtids and labels every time labeling is run """
 
     snapshot = {t['twtid']: t.get('label') for t in nativedb}
-    namestamp = time.strftime('%Y-%m-%d_%H:%m:%S')
+    namestamp = time.strftime('%Y-%m-%d_%H-%m-%S')
     picklename = 'labelsnapshot_' + namestamp + '.p'
     pickle.dump(snapshot, open(picklename, 'w'))
     return None

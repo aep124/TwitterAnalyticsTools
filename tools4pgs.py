@@ -8,6 +8,7 @@ import tools4urls
 import pickle
 import time
 
+
 class ConnSettings:
     """ really simple class to hold postgres connection settings
         (could have just used a dictionary)
@@ -57,6 +58,7 @@ def ex_cond2():
     return 'id = "262345490174181376"'
 
 
+
 def writenativedb(filename):
     """ returns a rudimentary form of relational database as a list
         of dictionaries, which are both native python data types
@@ -76,14 +78,12 @@ def writenativedb(filename):
     twts_cur.execute(twts_query)
 
     nativedb = []
-    dummydb = []
-
     rcnt = 0
     for twt in twts_cur.fetchall():
-        dummydb.append({})
-        dummydb[rcnt].update({'twtid': twt[0]})
-        dummydb[rcnt].update({'raw': twt[1].replace('\n',' ')})	
-        dummydb[rcnt].update({'userid': twt[2]})	
+        nativedb.append({})
+        nativedb[rcnt].update({'twtid': twt[0]})
+        nativedb[rcnt].update({'raw': twt[1].replace('\n',' ')})	
+        nativedb[rcnt].update({'userid': twt[2]})	
         rcnt += 1
         # output progress: 
         readprogress = 'tweets read: %-8i' % rcnt
@@ -94,20 +94,6 @@ def writenativedb(filename):
             break
     print # close progress line
 
-    # filter out tweets that lack native images:
-    icnt = 0
-    for icnt in range(ntwts):
-        raw = dummydb[icnt]['raw']
-        imgstatus = 'looking for img in tweet '
-        imgstatus += str(icnt+1) + ': ... %-35s' % raw[-35:]
-        sys.stdout.flush()
-        sys.stdout.write('\r' + imgstatus)
-        check4img = tools4urls.hasnimage(raw)
-        if check4img:
-            nativedb.append(dummydb[icnt])
-    print # close status
-    print('tweets with images found: %-8i' % len(nativedb))
-    
     # identify handles by looking up user id in "users" database:
     users_cur = pgconn.cursor()
     users_query = 'SELECT id,screen_name FROM users'
@@ -123,7 +109,6 @@ def writenativedb(filename):
     print
     users_cur.close()
 
-	
     # close connection and pickle database:
     pgconn.close()
     pickle.dump(nativedb, open(filename, 'w'))
@@ -131,5 +116,95 @@ def writenativedb(filename):
     return None
 
 
+
+def writecheck4imgs(picklename, pullname='', pushname=''):
+    """ wrapper for 'runcheck4imgs()' that checks connection """
+
+    dummydb = pickle.load(open(picklename,'r'))
+    if tools4urls.connectionOK():
+        nativedb = runcheck4imgs(dummydb, pullname, pushname)
+        pickle.dump(nativedb, open(picklename, 'w'))
+    return None 
+
+
+
+def runcheck4imgs(dummydb, pullname, pushname):
+    """ removes tweets without native images 
+        (this function was separted from main native db write 
+        function because it takes a long time to run, and backs
+        itself up to a text file)
+        NOTE: only call if network connection is known to be OK !!!
+        (will return all false negatives otherwise)
+        """
+
+    # handle backup files 
+    if (pushname == ''):
+        pushname = 'imgtwtids_backedup'
+    if (pushname == pullname):
+        print('error: pushfile and pullfile have the same name') 
+    pushfile = open(pushname,'w')
+    if (pullname != ''):
+        pullfile = open(pullname,'r')
+        # read in id:tag pairs as dictionary 
+        # (tag = 'hasimg' or 'noimg')
+        idtagpairs = pullfile.readlines()
+        pullfile.close()
+        idtagmap = {p.split()[0]:p.split()[1] for p in idtagpairs}  
+    else:
+        idtagmap = {}       
+
+    # loop through instances
+    nativedb = []
+    icnt = 0
+    lastpause = time.time()
+    for icnt in range(len(dummydb)):
+        thistwtid = dummydb[icnt].get('twtid')
+        thistag = idtagmap.get(thistwtid)
+
+        # check for image two ways:
+        # by looking in the backed-up list:
+        if (thistwtid in idtagmap.keys()):
+            check4img = (thistag == 'hasimg')
+        # by following url (only do if id is not in backup file)
+        else:
+            raw = dummydb[icnt].get('raw')
+            imgstatus = 'looking for img in tweet '
+            imgstatus += str(icnt+1) + ': ... %-35s' % raw[-35:]
+            sys.stdout.write('\r' + imgstatus)
+            sys.stdout.flush()
+            # this is the time-consuming line:
+            check4img = tools4urls.hasnimage(raw)
+
+        # aggregate two checks and record appropriate result
+        if (check4img):
+            nativedb.append(dummydb[icnt])
+            backup = thistwtid + ' hasimg' + '\n' 
+            pushfile.write(backup)
+        else:
+            backup = thistwtid + ' noimg' + '\n' 
+            pushfile.write(backup)          
+
+        # pause to allow user to cancel if necessary:
+        if ((time.time()-lastpause) > 30):
+            pausecondition = True 
+            lastpause = time.time()
+        else:
+            pausecondition = False 
+        if pausecondition:
+            print
+            print('... pausing to quit (ctrl+c) if necessary ...')
+            cntdown = 5
+            while cntdown > 0:
+                cntdownmsg = '(will automatically continue in '
+                cntdownmsg += '%2i seconds)' % cntdown
+                sys.stdout.write('\r' + cntdownmsg)
+                sys.stdout.flush()
+                time.sleep(1.0)
+                cntdown -= 1
+      
+    print # close status
+    print('tweets with images found: %-8i' % len(nativedb))
+    pushfile.close()
+    return nativedb
 
 
