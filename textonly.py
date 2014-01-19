@@ -11,56 +11,64 @@ import tools4pgs
 import tools4parsing 
 import tools4fv 
 import tools4labeling
-# in case the handlemap (or anything else) needs to be pickled
 import pickle
+import copy
+import numpy as np
+import pandas as pd
 
-# dictionary entry names:
-#    NAME         TYPE 
-#    twtid ...... string (of digits)
-#    raw ........ string
-#    filtered ... string
-#    userid ..... string (of digits)
-#    handle ..... string
-#    features ... list
-#    labels ..... tuple of strings (actlabel, timelabel)
+# dividing into two dataframe because tweet info is fixed, but features are flexible
+# tweet info data frame columns:
+#    NAME          DATATYPE 
+#    twtid ....... string (of digits)
+#    raw ......... string
+#    filtered .... string
+#    userid ...... string (of digits)
+#    handle ...... string
+#    label ....... string
 
-#################### (1) Get Tweets ####################
-tools4pgs.writenativedb('data.p')
-tools4pgs.writecheck4imgs('data.p')
+# tweet features data frame columns 
+#    twtid ....... string (of digits)
+#    feature 1 ... TF score for word 1
+#    feature 2 ... TF score for word 2
+#       :
+#    feature n ... TF score for word n
+#    label ....... string
 
 
-#################### (2) Apply Labels ####################
+
+############### (1) Get Tweets ################ 
+query = 'SELECT id,text,user_id FROM tweets'
+condition = "WHERE text like '%bears%'"
+tools4pgs.writetwtinfo(query, condition, 'twtinfo.p')
+
+
+############### (2) Apply Labels ###############
 labelmap = tools4labeling.getlabelmap('labelsystem')
-tools4labeling.writelabels('data.p', labelmap)
+tools4labeling.writelabels('twtinfo.p', labelmap)
 
 
-
-#################### (3) Filter ####################
+################# (3) Filter ################
 keepset = tools4parsing.getkeepset('POS2keep') 
-tools4parsing.writefiltered('data.p', keepset) 
+tools4parsing.writefiltered('twtinfo.p', keepset) 
 # TODO: add functionality for reply tweets (conversations) ????????
 
 
-#################### (4) Derive Features ####################
-wordmap = tools4fv.getwordmap('data.p')
+############## (4) Derive Features ##############
+wordmap = tools4fv.getwordmap('twtinfo.p')
 wordlist = wordmap.keys()
 # specify threshold directly :
 # freq_threshold = 2
 # could also specify threshold by number of words (e.g., 500):
 # freq_threshold = sorted(wordmap.values())[-500]
 # wordlist = [w for w in wordmap.keys() if wordmap[w] >= freq_threshold]
-tools4fv.writefeatures('data.p', wordlist)
 
 
-#################### (5) Make ARFF File ####################
-tools4fv.writearff('data.p', wordlist) 
+tools4fv.writetf('twtinfo.p','twtfeatures.p', wordlist)
+tools4fv.synclabels('twtinfo.p','twtfeatures.p')
 
 
-
-
-
-
-
+############### (5) Make ARFF File ###############
+#tools4fv.writearff('twtfeatures.p') 
 
 
 

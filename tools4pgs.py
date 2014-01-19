@@ -8,6 +8,9 @@ import tools4urls
 import pickle
 import time
 
+import numpy as np
+import pandas as pd
+
 
 class ConnSettings:
     """ really simple class to hold postgres connection settings
@@ -58,13 +61,21 @@ def ex_cond2():
     return 'id = "262345490174181376"'
 
 
+# psuedocode:
+# 
 
-def writenativedb(filename):
-    """ returns a rudimentary form of relational database as a list
-        of dictionaries, which are both native python data types
-        "ntwts" = number of tweets to retrieve
-        """
+def writetwtinfo(query, condition, filename, onlyNativeImgs=False):
+    """ returns a pandas-style data frame """
     
+    # tweet info data frame columns:
+    #    NAME          DATATYPE 
+    #    twtid ....... string (of digits)
+    #    raw ......... string
+    #    filtered .... string
+    #    userid ...... string (of digits)
+    #    handle ...... string
+    #    label ....... string
+
     # get number of tweets from user:
     prompt = 'How many tweets do you want to get?'
     print(prompt)
@@ -74,16 +85,27 @@ def writenativedb(filename):
 
     # get tweet ids and raw text from "tweets" database:
     twts_cur = pgconn.cursor()
-    twts_query = 'SELECT id,text,user_id FROM tweets;'
-    twts_cur.execute(twts_query)
+    print 'running query'
+    limitcondition = 'LIMIT %i' % ntwts
+    # could also limits results by using fetchmany(ntwts)
+    full_query = query + ' ' + condition + ' ' + limitcondition + ';'
+    twts_cur.execute(full_query)
+    print 'query complete'
+    ntwts = min([ntwts, twts_cur.rowcount])
 
-    nativedb = []
+    # initialize 
+    pandasDF = initializeInfoDF(ntwts)
+    print 'data frame initialized'
+
+    # twts_cur.fetchall() returns a list of lists [id,text,user_id] 
     rcnt = 0
     for twt in twts_cur.fetchall():
-        nativedb.append({})
-        nativedb[rcnt].update({'twtid': twt[0]})
-        nativedb[rcnt].update({'raw': twt[1].replace('\n',' ')})	
-        nativedb[rcnt].update({'userid': twt[2]})	
+        pandasDF.loc[rcnt, 'twtid'] = twt[0]
+        rawstring = twt[1]
+        rawstring = rawstring.replace('\n',' ')
+        rawstring = rawstring.replace('\r',' ')
+        pandasDF.loc[rcnt, 'raw'] = rawstring 
+        pandasDF.loc[rcnt, 'userid'] = twt[2]
         rcnt += 1
         # output progress: 
         readprogress = 'tweets read: %-8i' % rcnt
@@ -94,117 +116,65 @@ def writenativedb(filename):
             break
     print # close progress line
 
-    # identify handles by looking up user id in "users" database:
-    users_cur = pgconn.cursor()
-    users_query = 'SELECT id,screen_name FROM users'
-    users_cur.execute(users_query)
-    ucnt = 0
-    id2handle = dict(users_cur.fetchall())
-    for inst in nativedb:
-        inst.update({'handle': id2handle[inst['userid']]})
-        ucnt += 1
-        userprogress = 'user handles read: %-8i' % ucnt
-        sys.stdout.flush()
-        sys.stdout.write('\r' + userprogress)
-    print
-    users_cur.close()
+    # filter out tweets that lack native images:
+    if bool(onlyNativeImgs):
+        icnt = 0
+        keeplist = []
+        for icnt in range(ntwts):
+            raw = pandasDF.loc[icnt, 'raw']
+            imgstatus = 'looking for img in tweet '
+            imgstatus += str(icnt+1) + ': ... %-35s' % raw[-35:]
+            sys.stdout.flush()
+            sys.stdout.write('\r' + imgstatus)
+            check4img = tools4urls.hasnimage(raw)
+            if check4img:
+                keeplist.append(icnt)
+        pandasDF = pandasDF.loc[keeplist]
+        pandasDF.reset_index(drop=True, inplace=True)
+        print # close status
+        print('tweets with images found: %-8i' % len(pandasDF))
 
+    # code below is a rudimentary way to get user handles - for some reason i can't access the table, so i'm commenting it out
+    # identify handles by looking up user id in "users" database:
+    #users_cur = pgconn.cursor()
+    #Uquery = 
+    #users_cur.execute(Uquery)
+    #ucnt = 0
+    #idHandleMap = dict(users_cur.fetchall())
+    #for index in pandasDF:
+    #    currentid = pandasDF.loc[index, 'userid']
+    #    pandasDF.loc[index, 'handle'] = idHandleMap[currentid]
+    #    ucnt += 1
+    #    userprogress = 'user handles read: %-8i' % ucnt
+    #    sys.stdout.flush()
+    #    sys.stdout.write('\r' + userprogress)
+    #print
+    #users_cur.close()
+
+	
     # close connection and pickle database:
     pgconn.close()
-    pickle.dump(nativedb, open(filename, 'w'))
+    pickle.dump(pandasDF, open(filename, 'w'))
     print('pickling complete')
     return None
 
 
+def initializeInfoDF(ntwts):
+    """ initializes the tweet info data frame """
 
-def writecheck4imgs(picklename, pullname='', pushname=''):
-    """ wrapper for 'runcheck4imgs()' that checks connection """
-
-    dummydb = pickle.load(open(picklename,'r'))
-    if tools4urls.connectionOK():
-        nativedb = runcheck4imgs(dummydb, pullname, pushname)
-        pickle.dump(nativedb, open(picklename, 'w'))
-    return None 
-
-
-
-def runcheck4imgs(dummydb, pullname, pushname):
-    """ removes tweets without native images 
-        (this function was separted from main native db write 
-        function because it takes a long time to run, and backs
-        itself up to a text file)
-        NOTE: only call if network connection is known to be OK !!!
-        (will return all false negatives otherwise)
-        """
-
-    # handle backup files 
-    if (pushname == ''):
-        pushname = 'imgtwtids_backedup'
-    if (pushname == pullname):
-        print('error: pushfile and pullfile have the same name') 
-    pushfile = open(pushname,'w')
-    if (pullname != ''):
-        pullfile = open(pullname,'r')
-        # read in id:tag pairs as dictionary 
-        # (tag = 'hasimg' or 'noimg')
-        idtagpairs = pullfile.readlines()
-        pullfile.close()
-        idtagmap = {p.split()[0]:p.split()[1] for p in idtagpairs}  
-    else:
-        idtagmap = {}       
-
-    # loop through instances
-    nativedb = []
-    icnt = 0
-    lastpause = time.time()
-    for icnt in range(len(dummydb)):
-        thistwtid = dummydb[icnt].get('twtid')
-        thistag = idtagmap.get(thistwtid)
-
-        # check for image two ways:
-        # by looking in the backed-up list:
-        if (thistwtid in idtagmap.keys()):
-            check4img = (thistag == 'hasimg')
-        # by following url (only do if id is not in backup file)
-        else:
-            raw = dummydb[icnt].get('raw')
-            imgstatus = 'looking for img in tweet '
-            imgstatus += str(icnt+1) + ': ... %-35s' % raw[-35:]
-            sys.stdout.write('\r' + imgstatus)
-            sys.stdout.flush()
-            # this is the time-consuming line:
-            check4img = tools4urls.hasnimage(raw)
-
-        # aggregate two checks and record appropriate result
-        if (check4img):
-            nativedb.append(dummydb[icnt])
-            backup = thistwtid + ' hasimg' + '\n' 
-            pushfile.write(backup)
-        else:
-            backup = thistwtid + ' noimg' + '\n' 
-            pushfile.write(backup)          
-
-        # pause to allow user to cancel if necessary:
-        if ((time.time()-lastpause) > 30):
-            pausecondition = True 
-            lastpause = time.time()
-        else:
-            pausecondition = False 
-        if pausecondition:
-            print
-            print('... pausing to quit (ctrl+c) if necessary ...')
-            cntdown = 5
-            while cntdown > 0:
-                cntdownmsg = '(will automatically continue in '
-                cntdownmsg += '%2i seconds)' % cntdown
-                sys.stdout.write('\r' + cntdownmsg)
-                sys.stdout.flush()
-                time.sleep(1.0)
-                cntdown -= 1
-      
-    print # close status
-    print('tweets with images found: %-8i' % len(nativedb))
-    pushfile.close()
-    return nativedb
+    # initialize the dataframe
+    # tweet IDs and user IDs are 64-bit integers
+    templateMap = {'twtid':str(2**64)}
+    templateMap.update({'userid':str(2**64)})
+    # raw and filtered messages have max 140 chars 
+    templateMap.update({'raw':'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad ....'})
+    templateMap.update({'filtered':'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad ....'})
+    # handles are max 15 chars
+    templateMap.update({'handle': 'a'*15})
+    # make labels (arbitrarily) 5-character string
+    # setting to array will force entire data frame to length ntwts
+    templateMap.update({'label':np.array(['no_label']*ntwts)})
+    pandasDF = pd.DataFrame(templateMap)
+    return pandasDF
 
 

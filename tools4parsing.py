@@ -1,6 +1,11 @@
 # this package contains some tools for dealing with tweets in conjunction with CMU POS tagger 
 
 import pickle
+import subprocess 
+import copy
+
+import numpy as np
+import pandas as pd
 
 def getkeepset(filename):
     """ returns a set of tags from the file
@@ -15,40 +20,77 @@ def getkeepset(filename):
     return keepset
 
 
+def separatewords(twtstring):
+    """ processes a tweet string and adds spaces between emoji """
+    
+    # pseudo-code to identify words:
+    # decode the twt string using UTF-8
+    # loop through each character and test for surrogates 
+    # if surrogate, add spaces around the character and its partner
+
+    decodedtwt = twtstring.decode('utf-8')
+    spacedtwt = ''
+    index = 0
+
+    while (index < len(decodedtwt)):
+        codepnt = ord(decodedtwt[index])
+        is_surrogate = bool((codepnt >= 0xd800) & (codepnt <= 0xdfff))
+        is_32bit = bool(codepnt >= 0xffff)
+        if (is_surrogate):
+            spacedtwt = spacedtwt + ' ' + decodedtwt[index:index+2] + ' '
+            index = index + 2
+        elif (is_32bit):
+            spacedtwt = spacedtwt + ' ' + decodedtwt[index] + ' '
+            index = index + 1
+        else:
+            spacedtwt = spacedtwt + decodedtwt[index]
+            index = index + 1    
+
+    return spacedtwt
+
+
 def writefiltered(dbfilename, keepset):
     """ runs the CMU POS tagger and populates the 'filtered' 
         field of the database as a list of words
-        """
+        """ 
+        
     # unpickle database:
-    nativedb = pickle.load(open(dbfilename, 'r'))
+    pandasDF = pickle.load(open(dbfilename, 'r'))
     
-    # write raw tweets from db to file
+    # write raw tweets from data frame to file
     writefile = open('rawtwts','w')
-    for entry in nativedb:
-        writefile.write(entry['raw'] + '\n')
+    for index in pandasDF.index:
+        twtstring = copy.copy(pandasDF.loc[index,'raw'])
+        spacedtwt = separatewords(twtstring)
+        writefile.write(spacedtwt + '\n')
     writefile.close()
 
     # run tagger:
     infile = open('rawtwts','r')
     outfile = open('taggedtwts','w')
-    subprocess.call('./runTagger', stdin = infile, stdout = outfile)
+    subprocess.call('./runTagger.sh', stdin = infile, stdout = outfile)
     infile.close()
     outfile.close()
 
-    # retrieve filtered tweets from file and write to db:
+    # make sure 'filtered' column exists
+    if ('filtered' not in list(pandasDF.columns)):
+        ntwts = len(pandasDF)
+        pandasDF['filtered'] = np.array(['Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad ....']*ntwts)
+
+    # retrieve filtered tweets from file and write to data frame:
     taggedfile = open('taggedtwts', 'r') 
     cnt = 0
     for line in taggedfile:
         words = line.split('\t')[0]
         tags = line.split('\t')[1]
         tuples = zip(words.split(), tags.split())
-        words = [wt[0] for wt in tuples if wt[1] in keepset]
-        nativedb[cnt].update({'filtered': words})
+        wordlist = [wt[0] for wt in tuples if wt[1] in keepset]
+        pandasDF.loc[cnt,'filtered'] = ' '.join(wordlist)
         cnt = cnt + 1
     taggedfile.close()
 
     # re-pickle the database and exit
-    pickle.dump(nativedb, open(dbfilename, 'w'))
+    pickle.dump(pandasDF, open(dbfilename, 'w'))
     return None 
 
     

@@ -3,52 +3,120 @@
 
 import time 
 import pickle
+import copy
+
+import numpy as np
+import pandas as pd 
+
+# tweet info data frame columns:
+#    NAME          DATATYPE 
+#    twtid ....... string (of digits)
+#    raw ......... string
+#    filtered .... string
+#    userid ...... string (of digits)
+#    handle ...... string
+#    label ....... string
+
+# tweet features data frame columns 
+#    twtid ....... string (of digits)
+#    feature 1 ... TF score for word 1
+#    feature 2 ... TF score for word 2
+#       :
+#    feature n ... TF score for word n
+#    label ....... string
 
 
-
-def getwordmap(dbfilename):
+def getwordmap(infofilename):
     """ returns dictionary (a.k.a. map) in which keys are words
         and values are corpus frequencies
         """
 
-    nativedb = pickle.load(open(dbfilename, 'r'))
+    pandasDF = pickle.load(open(infofilename, 'r'))
     wordmap = {}
-    allfiltered = [inst['filtered'] for inst in nativedb]
-    for thiswordlist in allfiltered:
+    # filtered word set is just space-delimited string
+    allfiltered = pandasDF.filtered 
+    # loop through word sets:
+    for thiswordstring in allfiltered:
+        thiswordlist = thiswordstring.split()
+        # loop through the words in the word set 
         for word in thiswordlist:
-            word = word.lower()
-            if word in wordmap.keys():
-                wordmap[word] = wordmap[word] + 1
-            else:
-                wordmap.update({word: 1})
+            # process the word:
+            word = cleanword(word)
+            if word != '':
+                if word in wordmap.keys():
+                    wordmap[word] = wordmap[word] + 1
+                else:
+                    wordmap.update({word: 1})
     return wordmap
 
 
+def cleanword(wordstring):
 
-def writefeatures(filename, wordlist):
-    """ writes the features to the nativedb corresponding to the
-        elements of the wordlist
-        """
-    nativedb = pickle.load(open(filename,'r'))
-    for inst in nativedb:
-        twtlist = inst['filtered'].strip().split()
-        featurelist = [str(twtlist.count(w)) for w in wordlist]
-        inst.update({'features': featurelist})
-        # alternatively, could use regex
-        # word = '\\b' + word + '\\b'
-        # features = features + ', ' + str(len(re.findall(word,twt)))
-    pickle.dump(nativdb, open(filename, 'w'))
+    # convert all letters to lower case 
+    word = wordstring.lower()
+    # remove '\x ...' strings (i think they're emojis):
+    # codecs.decode('\xf0\x9f\x98\xb7')
+    if (r'\x' in word):
+        word = ''
+    return word 
+
+
+def writetf(infofilename, featfilename, wordlist):
+    """ writes term frequencies to the feature dataframe 
+        corresponding to the elements of the wordlist
+        """ 
+    # read the tweet info data frame from file 
+    infoDF = pickle.load(open(infofilename,'r'))
+    twtidcol = copy.copy(infoDF[['twtid']])
+
+    # initialize the feature data frame
+    ntwts = len(infoDF)
+    nwords = len(wordlist)
+    allzeros = np.zeros((ntwts,nwords), dtype=int)
+    # add "tf_" each word to name the feature
+    featnamelist = ['tf_' + word for word in wordlist]
+    justfeatures = pd.DataFrame(allzeros, columns = featnamelist)
+
+    print 'processing tweets ...'
+    # loop through both data frames and assign features
+    for index in infoDF.index:  
+        # get list of filtered words from info data frame
+        thiswordlist = infoDF.loc[index,'filtered'].strip().split()
+        # turn that into list of counts (as integers)
+        featurelist = [thiswordlist.count(w) for w in wordlist]
+        # assign that list to row of feature data frame 
+        justfeatures.loc[index] = featurelist
+
+    print 'handling pandas data frame ...'
+    # make feature data frame with tweet IDs and zeroed features 
+    featDF = pd.concat([twtidcol, justfeatures], axis=1)
+    # pickle the features
+    pickle.dump(featDF, open(featfilename, 'w'))
     return None 
 
 
+def synclabels(fromfilename, tofilename):
+    """ sychronizes labels between data frames, assuming 'from' 
+        is correct 
+        """
+    # unpickle both data frames
+    fromDF = pickle.load(open(fromfilename, 'r'))
+    toDF = pickle.load(open(tofilename, 'r'))
+    
+    # check whether or not toDF already has a label     
+    toDF['label'] = copy.copy(fromDF['label'])
+    pickle.dump(toDF, open(tofilename, 'w'))
+    return None
 
-def writearff(dbfilename, wordlist): 
-    """ writes the features and classesin the database to an arff file 
-        (reads, but does not write to, the database pickle file)
+
+
+def writearff(featfilename): 
+    """ writes features and classes in the feature data frame to an
+        arff file (does NOT write TO the data frame pickle file)
         """
 
     # as always, unpickle the database:
-    nativedb = pickle.load(open(dbfilename, 'r'))
+    featDF = pickle.load(open(featfilename, 'r'))
 
     # deal with time stuff and construct output file name:
     writetime = time.gmtime()
@@ -57,63 +125,36 @@ def writearff(dbfilename, wordlist):
     arff = open(arffname, 'w')
 
     # write comments:
-    timeheader = '% Written on: ' + time.asctime(writetime) 
+    timestring = time.asctime(writetime) 
+    timeheader = '% Written on: ' + timestring
     arff.write(timeheader)
-
-    # write header:
-    arff.write('@RELATION ' + 'wordfreq' + str(len(wordlist)) + '\n\n')
-    for word in wordlist: 
-        attribute = '@ATTRIBUTE %-15s NUMERIC \n' % word
-        arff.write(attribute)
-    actclasses = '{pos,neg}'
-    arff.write('@ATTRIBUTE %-15s ' + actclasses + ' \n' % 'actclass')
-    timeclasses = '{past,pres,future,ambiguous}'
-    arff.write('@ATTRIBUTE %-15s ' + timeclasses + ' \n\n' % 'timeclass')
+    
+    # write header: 
+    # first, description of overall relation:
+    featlist = list(featDF.columns)
+    featlist.remove('twtid')
+    featlist.remove('label')
+    nfeats = len(featlist)
+    reldesc = '@RELATION ' + 'tweetfeatures' + str(nfeats) + '\n\n'
+    arff.write(reldesc)
+    # next, write actual attribute descriptions  
+    for name in featlist: 
+        attrdesc = '@ATTRIBUTE %-15s NUMERIC \n' % name
+        arff.write(attrdesc)
+    # next, write class/label description 
+    labelset = set([str(level) for level in featDF['label']])
+    labelstring = '{' + ','.join(labelset) + '}'
+    arff.write('@ATTRIBUTE %-15s ' % 'class' + labelstring + ' \n')
     arff.write('@DATA \n')
 
     # write content:
-    for inst in nativedb: 
-        featurestring = ','.join(inst['features'])
-        labelstring = inst['actclass'] + ',' + inst['timeclass']
-        line = featurestring + ',' + labelstring + '\n'
-        arff.write(line)
+    for index in featDF.index: 
+        # get current feature vector 
+        thisfvlist = [str(feat) for feat in featDF.loc[index]]
+        thisfvlist.remove('twtid')        
+        thisfvstring = ','.join(thisfvlist) + '\n'
+        arff.write(thisfvstring)
     arff.close()
-    return None 
 
-
-def getcheckset(wordlist, features):
-    # this function returns a set of words indicated by the features
-    wfzipped = zip(wordlist, features)
-    checkset = set([wf[0] for wf in wfzipped if wf[1] > 0])
-    return checkset
-
-
-
-def runcheck(wordlist, twtfilename, featurefilename):
-    twtfile = open(twtfilename, 'r')
-    featurefile = open(featurefilename, 'r')
-    cnt = 0
-    for twt in twtfile:
-        cnt = cnt + 1
-        # make feature string into list of integers:
-        features = featurefile.readline().strip().split(',')
-        features = [int(f) for f in features]
-        # get set of words from the tweet string
-        fromtwt = set(twt.split())
-        # get set of words from the features:
-        fromfeatures = getcheckset(wordlist, features)
-        # test whether or not the two sets are the same:
-        xorset = fromtwt ^ fromfeatures
-        if len(xorset) == 0:
-            print('Line ' + str(cnt) + ' is OK')
-        else:
-            print('Line ' + str(cnt) + ' is NOT OK')
-            print('    (begins with "' + twt[:20] + ' ...")')
-            xorwords = ''
-            for el in xorset:
-                xorwords = xorwords + ' ' + el
-            print('    (inconsistency with following words: ' + xorwords + ' )')
-    twtfile.close()
-    featurefile.close()
     return None 
 
