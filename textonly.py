@@ -25,6 +25,7 @@ import pandas as pd
 #    userid ...... string (of digits)
 #    handle ...... string
 #    label ....... string
+#    imgurl ...... string 
 
 # tweet features data frame columns 
 #    twtid ....... string (of digits)
@@ -37,6 +38,8 @@ import pandas as pd
 
 
 ############### (1) Get Tweets ################ 
+# TODO: modify query handling to accomodate the column names that databases use, as well as subsets query variables 
+# (this is written for robbery database) 
 query = 'SELECT id,text,user_id FROM tweets'
 condition = "WHERE text like '%bears%'"
 tools4pgs.writetwtinfo(query, condition, 'twtinfo.p')

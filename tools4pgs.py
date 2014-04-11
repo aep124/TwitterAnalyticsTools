@@ -7,6 +7,7 @@ import sys
 import tools4urls
 import pickle
 import time
+import datetime 
 
 import numpy as np
 import pandas as pd
@@ -61,8 +62,6 @@ def ex_cond2():
     return 'id = "262345490174181376"'
 
 
-# psuedocode:
-# 
 
 def writetwtinfo(query, condition, filename, onlyNativeImgs=False):
     """ returns a pandas-style data frame """
@@ -70,11 +69,15 @@ def writetwtinfo(query, condition, filename, onlyNativeImgs=False):
     # tweet info data frame columns:
     #    NAME          DATATYPE 
     #    twtid ....... string (of digits)
+    #    time ........ datetime
     #    raw ......... string
     #    filtered .... string
     #    userid ...... string (of digits)
     #    handle ...... string
+    #    imgurl ...... string 
+    #    facecnt ..... integer  
     #    label ....... string
+
 
     # get number of tweets from user:
     prompt = 'How many tweets do you want to get?'
@@ -162,19 +165,124 @@ def writetwtinfo(query, condition, filename, onlyNativeImgs=False):
 def initializeInfoDF(ntwts):
     """ initializes the tweet info data frame """
 
+    # tweet info data frame columns:
+    #    NAME          DATATYPE 
+    #    twtid ....... string (of digits)
+    #    time ........ datetime
+    #    raw ......... string
+    #    filtered .... string
+    #    userid ...... string (of digits)
+    #    handle ...... string
+    #    imgurl ...... string 
+    #    facecnt ..... integer  
+    #    label ....... string
+
     # initialize the dataframe
     # tweet IDs and user IDs are 64-bit integers
     templateMap = {'twtid':str(2**64)}
+    # postgres timestamp gets converted to python datetime object 
+    currentdt = datetime.datetime.now()
+    templateMap.update({'time':currentdt})
     templateMap.update({'userid':str(2**64)})
     # raw and filtered messages have max 140 chars 
     templateMap.update({'raw':'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad ....'})
     templateMap.update({'filtered':'Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad ....'})
     # handles are max 15 chars
     templateMap.update({'handle': 'a'*15})
+    # image URLs end up being about 50 chars long
+    templateMap.update({'imgurl': 'x'*50})
+    # missing face count -- negative one 
+    templateMap.update({'facecnt':-1}) 
     # make labels (arbitrarily) 5-character string
     # setting to array will force entire data frame to length ntwts
     templateMap.update({'label':np.array(['no_label']*ntwts)})
     pandasDF = pd.DataFrame(templateMap)
     return pandasDF
+
+
+
+def writetwtinfo2(qmap, table, cond='', filename='twtinfo.p'):
+    """ returns a pandas-style data frame, using a query map rather
+        than a query string and filling extra fields 
+        """ 
+    
+    # tweet info data frame columns:
+    #    NAME          DATATYPE 
+    #    twtid ....... string (of digits)
+    #    time ........ datetime
+    #    raw ......... string
+    #    filtered .... string
+    #    userid ...... string (of digits)
+    #    handle ...... string
+    #    imgurl ...... string 
+    #    facecnt ..... integer  
+    #    label ....... string
+
+
+
+    # get number of tweets from user:
+    prompt = 'How many tweets do you want to get?'
+    print(prompt)
+    ntwts = int(sys.stdin.readline())
+
+    pgconn = openconn(getcs())
+
+    # get tweet ids and raw text from "tweets" database:
+    twts_cur = pgconn.cursor()
+    print 'running query'
+    limitcondition = 'LIMIT %i' % ntwts
+    # could also limits results by using fetchmany(ntwts)
+
+    # build query 
+    qitems = qmap.items()
+    # keys - column names in local data frame, values - names in db 
+    localnames = [pair[0] for pair in qitems]
+    dbnames = [pair[1] for pair in qitems]
+    qjoined = ','.join(dbnames)
+    qstring = 'SELECT ' + qjoined + ' FROM ' + table
+
+    full_query = qstring + ' ' + cond + ' ' + limitcondition + ';'
+    twts_cur.execute(full_query)
+    print 'query complete'
+    ntwts = min([ntwts, twts_cur.rowcount])
+    print(ntwts)
+    
+    # initialize 
+    pandasDF = initializeInfoDF(ntwts)
+    print 'data frame initialized'
+
+    # twts_cur.fetchall() returns a list of lists [var1, var1, ...] 
+    rcnt = 0
+    varRange = range(len(qmap))
+    # loop through tweets 
+    for twt in twts_cur.fetchall():
+        # loop through the variables returned by fetchall()
+        for ii in varRange:
+            # this assign this local variable name and its value
+            thislocal = localnames[ii]
+            thisvalue = twt[ii]
+            # special condition for raw text 
+            if (thislocal=='raw'):
+                thisvalue = thisvalue.replace('\n',' ')
+                thisvalue = thisvalue.replace('\r',' ')
+            # assign value to location in data frame
+            pandasDF.loc[rcnt, thislocal] = thisvalue
+
+        rcnt += 1
+        # output progress: 
+        readprogress = 'tweets read: %-8i' % rcnt
+        sys.stdout.flush()
+        sys.stdout.write('\r' + readprogress)
+        # check limit:
+        if (rcnt >= ntwts):
+            break
+    print # close progress line
+	
+    # close connection and pickle database:
+    pgconn.close()
+    pickle.dump(pandasDF, open(filename, 'w'))
+    print('pickling complete')
+    return None
+
 
 

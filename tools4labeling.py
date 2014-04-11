@@ -264,7 +264,7 @@ def writesnapshot(twtinfo):
     labels = copy.copy(twtinfo.label)
     # use dictionary comprehension:
     snapshot = {ids[ii]:labels[ii] for ii in twtinfo.index}
-    namestamp = time.strftime('%Y-%m-%d_%H-%m')
+    namestamp = time.strftime('%Y-%m-%d_%H%M%S')
     picklename = 'labelsnapshot_' + namestamp + '.p'
     pickle.dump(snapshot, open(picklename, 'w'))
     return None
