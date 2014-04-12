@@ -183,13 +183,15 @@ def getgenlimg(fullurl):
     # if 3rd-party app, look for something like these lines
     # <meta name="twitter:image" value="https://twitpic.com/show/large/3b499b.jpg" />
     # <meta name="twitter:image" value="http://a.yfrog.com/img220/7493/9ri.jpg" />
-    elif ((domain=='twitpic.com') | (domain=='twitter.yfrog.com')):
-        linestart = re.search('twitter:image', htmlsrc).end()
-        dist2url = re.search('http', htmlsrc[linestart:]).start()
-        fromindex = linestart + dist2url
-        urllength = re.search('"', htmlsrc[fromindex:]).start()
-        toindex =  fromindex + urllength
-        imgurl = htmlsrc[fromindex:toindex]
+    elif (('twitpic.com' in domain)|('twitter.yfrog.com' in domain)):
+        codelocation = re.search('twitter:image', htmlsrc)
+        if codelocation!=None:
+            linestart = codelocation.end()
+            dist2url = re.search('http', htmlsrc[linestart:]).start()
+            fromindex = linestart + dist2url
+            urllength = re.search('"', htmlsrc[fromindex:]).start()
+            toindex =  fromindex + urllength
+            imgurl = htmlsrc[fromindex:toindex]
     
     else:
         pass
