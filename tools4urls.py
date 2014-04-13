@@ -1,7 +1,6 @@
 # this module contains some tools for working with
 # urls in tweets 
 
-import urllib
 import urllib2
 import urlparse
 import re
@@ -19,7 +18,7 @@ def connectionOK():
 
     check = False
     try:
-        testconn = urllib.urlopen('http://www.google.com')
+        testconn = urllib2.urlopen('http://www.google.com')
         if (str(testconn.getcode()) == '200'):
             print('network connection OK')
             check = True
@@ -90,7 +89,7 @@ def getreal(tdotco):
         """
 
     fullurl = 'http://' + tdotco
-    urlobj = urllib.urlopen(fullurl)
+    urlobj = urllib2.urlopen(fullurl)
     realurl = None
     if (urlobj.getcode() == 200):
         realurl = urlobj.geturl() 
@@ -151,7 +150,7 @@ def getnimg(fullurl):
         https://twitter.com/[username]/status/[tweet id]/photo/1
         """
 
-    htmlsrc = urllib.urlopen(fullurl).read()
+    htmlsrc = urllib2.urlopen(fullurl).read()
     fromindex = re.search('img src=', htmlsrc).end() + 1
     toindex = re.search('\"', htmlsrc[fromindex:]).start() + fromindex
     imgurl = htmlsrc[fromindex:toindex]
@@ -168,7 +167,7 @@ def getgenlimg(fullurl):
     parsed = urlparse.urlparse(fullurl)
     domain = parsed.netloc
     # get the actual html content of the page  
-    htmlsrc = urllib.urlopen(fullurl).read()
+    htmlsrc = urllib2.urlopen(fullurl).read()
     imgurl = None
 
     # if the image is natively hosted, jump through the normal hoops 
@@ -183,15 +182,13 @@ def getgenlimg(fullurl):
     # if 3rd-party app, look for something like these lines
     # <meta name="twitter:image" value="https://twitpic.com/show/large/3b499b.jpg" />
     # <meta name="twitter:image" value="http://a.yfrog.com/img220/7493/9ri.jpg" />
-    elif (('twitpic.com' in domain)|('twitter.yfrog.com' in domain)):
-        codelocation = re.search('twitter:image', htmlsrc)
-        if codelocation!=None:
-            linestart = codelocation.end()
-            dist2url = re.search('http', htmlsrc[linestart:]).start()
-            fromindex = linestart + dist2url
-            urllength = re.search('"', htmlsrc[fromindex:]).start()
-            toindex =  fromindex + urllength
-            imgurl = htmlsrc[fromindex:toindex]
+    elif ((domain=='twitpic.com') | (domain=='twitter.yfrog.com')):
+        linestart = re.search('twitter:image', htmlsrc).end()
+        dist2url = re.search('http', htmlsrc[linestart:]).start()
+        fromindex = linestart + dist2url
+        urllength = re.search('"', htmlsrc[fromindex:]).start()
+        toindex =  fromindex + urllength
+        imgurl = htmlsrc[fromindex:toindex]
     
     else:
         pass
@@ -212,7 +209,7 @@ def saveimg(imgurl, path='', namestem='autosavedimg'):
             http://code.activestate.com/recipes/577385-image-downloader/
         """
 
-    imgdata = urllib.urlopen(imgurl).read() 
+    imgdata = urllib2.urlopen(imgurl).read() 
     # get the appropriate file extension and add it to name:
     spliturl = re.split("\.", imgurl)
     ext = spliturl[len(spliturl)-1]
