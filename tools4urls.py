@@ -172,23 +172,28 @@ def getgenlimg(fullurl):
 
     # if the image is natively hosted, jump through the normal hoops 
     if domain=='twitter.com':
-        codelocation = re.search('img src=', htmlsrc)
-        if codelocation!=None:
+        try:
+            codelocation = re.search('img src=', htmlsrc)
             fromindex = codelocation.end() + 1
             urllength = re.search('\"', htmlsrc[fromindex:]).start()
             toindex =  fromindex + urllength
             imgurl = htmlsrc[fromindex:toindex]
+        except:
+            imgurl = None
 
     # if 3rd-party app, look for something like these lines
     # <meta name="twitter:image" value="https://twitpic.com/show/large/3b499b.jpg" />
     # <meta name="twitter:image" value="http://a.yfrog.com/img220/7493/9ri.jpg" />
     elif ((domain=='twitpic.com') | (domain=='twitter.yfrog.com')):
-        linestart = re.search('twitter:image', htmlsrc).end()
-        dist2url = re.search('http', htmlsrc[linestart:]).start()
-        fromindex = linestart + dist2url
-        urllength = re.search('"', htmlsrc[fromindex:]).start()
-        toindex =  fromindex + urllength
-        imgurl = htmlsrc[fromindex:toindex]
+        try:
+            linestart = re.search('twitter:image', htmlsrc).end()
+            dist2url = re.search('http', htmlsrc[linestart:]).start()
+            fromindex = linestart + dist2url
+            urllength = re.search('"', htmlsrc[fromindex:]).start()
+            toindex =  fromindex + urllength
+            imgurl = htmlsrc[fromindex:toindex]
+        except:
+            imgurl = None
     
     else:
         pass
